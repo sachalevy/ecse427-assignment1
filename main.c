@@ -65,15 +65,17 @@ int getcmd(char *prompt, char *args[], int *background) {
     }
   }
 
+  // indicate no arguments found in command line
+  if (i==0) {
+    return -1;
+  }
+
   //TODO: explain fix for execvp to work 
   args[i++] = NULL;
 
-  return i;
+  return (i-1);
 }
 
-// TODO: implement exit: necessary to quit the shell
-// TODO: implement pwd: getcwd library routine
-// TODO: implement cd: chdir system call 
 // TODO: implement fg: called with a number and pick specified pid and put it in foreground
 // TODO: implement jobs: list all jobs running in the background at any given time (like ps)
 
@@ -92,22 +94,81 @@ int getcmdstatus(char *cmd, int *builtincmd_idx, int *builtincmds_count, char *b
     return cmd_status;
 }
 
+int runcwd() {
+    char cwd[256];
+    getcwd(cwd, sizeof(cwd));
+    printf("%s\n", cwd);
+    return 1;
+}
+
+int updatepids(int pid_count, pid_t pids[]) {
+    pid_t newpids[256];
+    int newpid_count = 0;
+    int pid_status;
+    int child_status;
+
+    for (int i=0; i < pid_count; i++) {
+        // check that the current pid is still active
+        pid_status = waitpid(pids[i], &child_status, WNOHANG);
+        // still valid pid, running process
+        if (pid_status == 0) {
+            newpids[newpid_count++] = pids[i];
+        }
+    }
+
+    // update vals for pids
+    pids = newpids;
+    pid_count = newpid_count;
+
+    return 1;
+}
+
+int fg(int pid_count, pid_t pids[]) {
+
+
+    return 1;
+}
+
+int jobs(int pid_count, pid_t pids[]) {
+    // check that the list is still valid 
+    updatepids(pid_count, pids);
+
+    printf("PID\n");
+    for (int i = 0; i < pid_count; i++) {
+        printf("%d\n", pids[i]);
+    }
+    return 1;
+}
+
 /*Execute command built-in to this shell.*/
-int execbuiltin(int *builtincmd_idx, char *args[]) {
+int execbuiltin(int *builtincmd_idx, char *args[], pid_t pids[], int *pid_count) {
     switch (*builtincmd_idx) {
+        // run "exit"
+        case 0:
+            exit(0);
         // run "pwd"
         case 1:
+            runcwd();
             return 1;
         // run "cd"
         case 2:
-            chdir(args[1]);
+            // accounting for fix with execvp and appended NULL value
+            if (args[1] == NULL) {
+                // print current directory if no arguments shown
+                runcwd();
+            } else {
+                // change dir to first command line argument
+                chdir(args[1]);
+            }
             return 1;
         // run fg
         case 3:
-            
+            fg(*pid_count, pids);
             return 1;
         // run jobs
         case 4:
+            jobs(*pid_count, pids);
+            return 1;
         default:
             break;
     } 
@@ -119,9 +180,15 @@ int execbuiltin(int *builtincmd_idx, char *args[]) {
     specified by user.
 */
 int main(void) {    
+    // parsed command line arguments
     char *args[20];
+    // boolean for background process
     int bg;
+    // record the index of the builtin command to execute
     int builtincmd_idx;
+    // store background pid processes
+    pid_t pids[256];
+    int pid_count = 0;
 
     // reference all builtin commands
     int builtincmds_count = 5;
@@ -135,46 +202,45 @@ int main(void) {
     while (1) {
         bg = 0;
         int cnt = getcmd(">>> ", args, &bg);
+        if (cnt == -1) {
+            continue;
+        }
 
         // check whether is a built-in (0) or system cmd (1)
         int cmd_status = getcmdstatus(args[0], &builtincmd_idx, &builtincmds_count, builtincmds);
+        if (cmd_status == 0) {
+            // execute directly in parent process
+            int status_code = execbuiltin(&builtincmd_idx, args, pids, &pid_count);
+        } else {
+            // create child process
+            pid_t child_pid;
+            int child_status;
 
-        // create child process
-        pid_t child_pid;
-        int child_status;
+            // fork current process, both parent and child processes now have a child_pid var
+            child_pid = fork();
+            pids[pid_count++] = child_pid;
+            printf("current pid %d", child_pid);
+            printf("pid count %d", pid_count);
 
-        // directly exit without calling a child process
-        if (builtincmd_idx == 0) {
-            exit(0);
+            // check if the pid is less than 0, something happened
+            if (child_pid < 0) {
+              exit(-1);
+            }
+
+            // child process running, execute stuff there
+            else if (child_pid == 0) {
+                int status_code = execvp(args[0], args);
+                exit(status_code);
+            }
+
+            // here from the parent process - can wait for the child to return
+            // or continue if supposed to let the child run in the background
+            else if (bg == 0){
+                int exit_status = waitpid(child_pid, &child_status, 0);
+            }
+            else {
+                continue;
+            }
         }
-
-        // fork current process, both parent and child processes now have a child_pid var
-        child_pid = fork();
-
-        // check if the pid is less than 0, something happened
-        if (child_pid < 0) {
-          exit(-1);
-        }
-
-        // child process running, execute stuff there
-        else if (child_pid == 0) {
-          // is a system command
-          if (cmd_status) {
-            int status_code = execvp(args[0], args);
-            exit(status_code);
-          }
-          // is a built-in command
-          else {
-            int status_code = execbuiltin(&builtincmd_idx, args);
-            exit(status_code);
-          }
-        }
-
-        // here from the parent process - can wait for the child to return
-        // or continue if supposed to let the child run in the background
-        else {
-            int exit_status = waitpid(child_pid, &child_status, 0);
-            printf("%d", child_status);
-        }
-      }
+    }        
 }
