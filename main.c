@@ -101,13 +101,32 @@ int runcwd() {
     return 1;
 }
 
-int updatepids(int pid_count, pid_t pids[]) {
+int rediroutput(char *args[], int *arg_count, char *output_filename[]) {
+    for(int i = 0; i < *arg_count; i++) {
+        if(args[i][0]== '>') {
+            if (args[i+1] != NULL) {
+                *output_filename = args[i+1];
+            } else {
+                return -1;
+            }
+            // replace all upcoming args to account for redirected output on this command
+            for(int j = i; args[j-1] != NULL; j++) {
+                args[j] = args[j+2];
+            }
+            return 1;
+        }
+    }
+    return 0;
+}
+
+
+int updatepids(int *pid_count, pid_t pids[]) {
     pid_t newpids[256];
     int newpid_count = 0;
     int pid_status;
     int child_status;
 
-    for (int i=0; i < pid_count; i++) {
+    for (int i=0; i < *pid_count; i++) {
         // check that the current pid is still active
         pid_status = waitpid(pids[i], &child_status, WNOHANG);
         // still valid pid, running process
@@ -117,24 +136,24 @@ int updatepids(int pid_count, pid_t pids[]) {
     }
 
     // update vals for pids
+    *pid_count = newpid_count;
     pids = newpids;
-    pid_count = newpid_count;
 
     return 1;
 }
 
-int fg(int pid_count, pid_t pids[]) {
-
+int fg(int *selected_pid, int *pid_count, pid_t pids[]) {
+    updatepids(pid_count, pids);
 
     return 1;
 }
 
-int jobs(int pid_count, pid_t pids[]) {
+int jobs(int *pid_count, pid_t pids[]) {
     // check that the list is still valid 
     updatepids(pid_count, pids);
 
     printf("PID\n");
-    for (int i = 0; i < pid_count; i++) {
+    for (int i = 0; i < *pid_count; i++) {
         printf("%d\n", pids[i]);
     }
     return 1;
@@ -142,6 +161,8 @@ int jobs(int pid_count, pid_t pids[]) {
 
 /*Execute command built-in to this shell.*/
 int execbuiltin(int *builtincmd_idx, char *args[], pid_t pids[], int *pid_count) {
+    int selected_pid = -1;
+
     switch (*builtincmd_idx) {
         // run "exit"
         case 0:
@@ -163,11 +184,17 @@ int execbuiltin(int *builtincmd_idx, char *args[], pid_t pids[], int *pid_count)
             return 1;
         // run fg
         case 3:
-            fg(*pid_count, pids);
+            // if arg 1 exists (i.e. pid to bring to foreground)
+            // otherwise bring the first process in the pid list (oldest child running)
+            // if not do not do anythign
+            if (args[1] != NULL) {
+                selected_pid = atoi(args[1]);
+            }
+            fg(&selected_pid, pid_count, pids);
             return 1;
         // run jobs
         case 4:
-            jobs(*pid_count, pids);
+            jobs(pid_count, pids);
             return 1;
         default:
             break;
@@ -189,6 +216,7 @@ int main(void) {
     // store background pid processes
     pid_t pids[256];
     int pid_count = 0;
+    int child_status;
 
     // reference all builtin commands
     int builtincmds_count = 5;
@@ -200,6 +228,7 @@ int main(void) {
     builtincmds[4] = "jobs";
 
     while (1) {
+        char *output_filename[1];
         bg = 0;
         int cnt = getcmd(">>> ", args, &bg);
         if (cnt == -1) {
@@ -208,19 +237,20 @@ int main(void) {
 
         // check whether is a built-in (0) or system cmd (1)
         int cmd_status = getcmdstatus(args[0], &builtincmd_idx, &builtincmds_count, builtincmds);
+        // TODO: modify the output filename from an array of strings to a string
+        int redirected = rediroutput(args, &cnt, output_filename);
+        if(redirected == 1) {
+            freopen(output_filename[0], "w+", stdout);
+        }
+
         if (cmd_status == 0) {
             // execute directly in parent process
             int status_code = execbuiltin(&builtincmd_idx, args, pids, &pid_count);
         } else {
-            // create child process
-            pid_t child_pid;
-            int child_status;
-
             // fork current process, both parent and child processes now have a child_pid var
-            child_pid = fork();
+            pid_t child_pid = fork();
+            //printf("pid count %d pid %d \n", pid_count, *pids[pid_count]);
             pids[pid_count++] = child_pid;
-            printf("current pid %d", child_pid);
-            printf("pid count %d", pid_count);
 
             // check if the pid is less than 0, something happened
             if (child_pid < 0) {
