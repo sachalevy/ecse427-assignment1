@@ -8,7 +8,7 @@
 
 static void sigHandler(int sig) { printf("Hey! Caught signla %d\n", sig); }
 
-int main_sig() {
+int sig_handler() {
   /*Entry point for signal handling.*/
   if (signal(SIGINT, sigHandler) == SIG_ERR) {
     printf("ERROR! hej\n");
@@ -27,7 +27,6 @@ int main_sig() {
     by the user.
   */
 int getcmd(char *prompt, char *args[], int *background) {
-  
   int length, i = 0;
   char *token, *loc;
   char *line = NULL;
@@ -59,218 +58,373 @@ int getcmd(char *prompt, char *args[], int *background) {
         token[j] = '\0';
       }
     }
-    // if token exists - add it to the arguments 
+    // if token exists - add it to the arguments
     if (strlen(token) > 0) {
       args[i++] = token;
     }
   }
 
   // indicate no arguments found in command line
-  if (i==0) {
+  if (i == 0) {
     return -1;
   }
 
-  //TODO: explain fix for execvp to work 
+  // TODO: explain fix for execvp to work
   args[i++] = NULL;
 
-  return (i-1);
+  return (i - 1);
 }
 
-// TODO: implement fg: called with a number and pick specified pid and put it in foreground
-// TODO: implement jobs: list all jobs running in the background at any given time (like ps)
+// TODO: implement fg: called with a number and pick specified pid and put it
+// in foreground
+// TODO: implement jobs: list all jobs running in the background at any given
+// time (like ps)
 
-int getcmdstatus(char *cmd, int *builtincmd_idx, int *builtincmds_count, char *builtincmds[]) {
-    // default - command is not builtin
-    int cmd_status = 1;
+int getcmdstatus(char *cmd, int *builtincmd_idx, int *builtincmds_count,
+                 char *builtincmds[]) {
+  // default - command is not builtin
+  int cmd_status = 0;
 
-    for (int i = 0; i < *builtincmds_count; i++) {
-        if (strcmp(cmd, builtincmds[i]) == 0) {
-           cmd_status = 0;
-           *builtincmd_idx = i;
-           break;
-        }
+  for (int i = 0; i < *builtincmds_count; i++) {
+    if (strcmp(cmd, builtincmds[i]) == 0) {
+      cmd_status = 1;
+      *builtincmd_idx = i;
+      break;
     }
+  }
 
-    return cmd_status;
+  return cmd_status;
 }
 
 int runcwd() {
-    char cwd[256];
-    getcwd(cwd, sizeof(cwd));
-    printf("%s\n", cwd);
-    return 1;
+  char cwd[256];
+  getcwd(cwd, sizeof(cwd));
+  printf("%s\n", cwd);
+  return 1;
 }
 
 int rediroutput(char *args[], int *arg_count, char *output_filename[]) {
-    for(int i = 0; i < *arg_count; i++) {
-        if(args[i][0]== '>') {
-            if (args[i+1] != NULL) {
-                *output_filename = args[i+1];
-            } else {
-                return -1;
-            }
-            // replace all upcoming args to account for redirected output on this command
-            for(int j = i; args[j-1] != NULL; j++) {
-                args[j] = args[j+2];
-            }
-            return 1;
-        }
+  /*Check if the output is to be redirected to a file. So far only assume
+      this for a trailing statement, the output redirection is specified
+      at the end of the command line.
+  */
+
+  for (int i = 0; i < *arg_count; i++) {
+    if (args[i][0] == '>') {
+      if (args[i + 1] != NULL) {
+        *output_filename = args[i + 1];
+      } else {
+        return -1;
+      }
+      return 1;
     }
-    return 0;
+  }
+  return 0;
 }
 
+int pipedoutput(char *args[], char *pipedargs[], int *arg_count) {
+  for (int i = 0; i < *arg_count; i++) {
+    if (args[i][0] == '|') {
+      // if no argument is provided after pipe, error
+      if (args[i + 1] == NULL) {
+        // handle the | character otherwise passed to input
+        return -1;
+      } else {
+        // init piped args & remove from args
+        for (int j = 0; j < *arg_count; j++) {
+          pipedargs[j] = args[i + j + 1];
+          args[i + j + 1] = NULL;
+          if (args[i + j + 2] == NULL) {
+            break;
+          }
+        }
+        args[i] = NULL;
+      }
+      return 1;
+    }
+  }
+  return 0;
+}
 
 int updatepids(int *pid_count, pid_t pids[]) {
-    pid_t newpids[256];
-    int newpid_count = 0;
-    int pid_status;
-    int child_status;
+  pid_t newpids[256];
+  int newpid_count = 0;
+  int pid_status;
+  int child_status;
 
-    for (int i=0; i < *pid_count; i++) {
-        // check that the current pid is still active
-        pid_status = waitpid(pids[i], &child_status, WNOHANG);
-        // still valid pid, running process
-        if (pid_status == 0) {
-            newpids[newpid_count++] = pids[i];
-        }
+  for (int i = 0; i < *pid_count; i++) {
+    // check that the current pid is still active
+    pid_status = waitpid(pids[i], &child_status, WNOHANG);
+    // still valid pid, running process
+    if (pid_status == 0) {
+      newpids[newpid_count++] = pids[i];
     }
+  }
 
-    // update vals for pids
-    *pid_count = newpid_count;
-    pids = newpids;
+  // update vals for pids
+  *pid_count = newpid_count;
+  pids = newpids;
 
-    return 1;
+  return 1;
 }
 
 int fg(int *selected_pid, int *pid_count, pid_t pids[]) {
-    updatepids(pid_count, pids);
+  updatepids(pid_count, pids);
 
-    return 1;
+  return 1;
 }
 
 int jobs(int *pid_count, pid_t pids[]) {
-    // check that the list is still valid 
-    updatepids(pid_count, pids);
+  // check that the list is still valid
+  updatepids(pid_count, pids);
 
-    printf("PID\n");
-    for (int i = 0; i < *pid_count; i++) {
-        printf("%d\n", pids[i]);
-    }
-    return 1;
+  printf("Proc PID\n");
+  for (int i = 0; i < *pid_count; i++) {
+    printf("%d %d\n", (i + 1), pids[i]);
+  }
+  return 1;
 }
 
 /*Execute command built-in to this shell.*/
-int execbuiltin(int *builtincmd_idx, char *args[], pid_t pids[], int *pid_count) {
-    int selected_pid = -1;
+int execbuiltin(int *builtincmd_idx, char *args[], pid_t pids[],
+                int *pid_count) {
+  int selected_pid = -1;
 
-    switch (*builtincmd_idx) {
-        // run "exit"
-        case 0:
-            exit(0);
-        // run "pwd"
-        case 1:
-            runcwd();
-            return 1;
-        // run "cd"
-        case 2:
-            // accounting for fix with execvp and appended NULL value
-            if (args[1] == NULL) {
-                // print current directory if no arguments shown
-                runcwd();
-            } else {
-                // change dir to first command line argument
-                chdir(args[1]);
-            }
-            return 1;
-        // run fg
-        case 3:
-            // if arg 1 exists (i.e. pid to bring to foreground)
-            // otherwise bring the first process in the pid list (oldest child running)
-            // if not do not do anythign
-            if (args[1] != NULL) {
-                selected_pid = atoi(args[1]);
-            }
-            fg(&selected_pid, pid_count, pids);
-            return 1;
-        // run jobs
-        case 4:
-            jobs(pid_count, pids);
-            return 1;
-        default:
-            break;
-    } 
+  switch (*builtincmd_idx) {
+  // run "exit"
+  case 0:
+    exit(0);
+  // run "pwd"
+  case 1:
+    runcwd();
+    return 1;
+  // run "cd"
+  case 2:
+    // accounting for fix with execvp and appended NULL value
+    if (args[1] == NULL) {
+      // print current directory if no arguments shown
+      runcwd();
+    } else {
+      // change dir to first command line argument
+      chdir(args[1]);
+    }
+    return 1;
+  // run fg
+  case 3:
+    // if arg 1 exists (i.e. pid to bring to foreground)
+    // otherwise bring the first process in the pid list (oldest child
+    // running) if not do not do anythign
+    if (args[1] != NULL) {
+      selected_pid = atoi(args[1]);
+    }
+    fg(&selected_pid, pid_count, pids);
+    return 1;
+  // run jobs
+  case 4:
+    jobs(pid_count, pids);
+    return 1;
+  default:
+    break;
+  }
 
-    return 0;
+  return 0;
+}
+
+int bepiped(char *args[], pid_t pids[], int *pid_count, int *background,
+            char *builtincmds[], int *builtincmds_count, int pipefd[]) {
+  int builtincmd_idx = 0;
+
+  if (getcmdstatus(args[0], &builtincmd_idx, builtincmds_count, builtincmds)) {
+    int status_code = execbuiltin(&builtincmd_idx, args, pids, pid_count);
+  } else {
+    int child_status;
+    pid_t child_pid = fork();
+    pids[(*pid_count)++] = child_pid;
+
+    if (child_pid < 0) {
+      // log error message in case of issue
+      printf("error: could not fork child\n");
+      exit(-1);
+    } else if (child_pid == 0) {
+      int status_code = execvp(args[0], args);
+      exit(status_code);
+    } else if (*background == 0) {
+      // always assume the first part of the pipe will be awaited for
+      int exit_status = waitpid(child_pid, &child_status, 0);
+
+    }
+  }
+
+  return 1;
+}
+
+int runpiped(char *args[], char *pipedargs[], pid_t pids[], int *pid_count,
+             int *background, char *builtincmds[], int *builtincmds_count) {
+  int pipefd[2];
+  pipe(pipefd);
+
+  if (pipe(pipefd) < 0) {
+    printf("error: could not initialize pipe\n");
+    exit(-1);
+  }
+
+  int builtincmd_idx = 0;
+  if (getcmdstatus(pipedargs[0], &builtincmd_idx, builtincmds_count,
+                   builtincmds)) {
+    dup2(pipefd[0], 0);
+    close(pipefd[1]);
+    close(pipefd[0]);
+
+    // run second part of the pipe, pipedargs
+    int status_code = bepiped(args, pids, pid_count, background, builtincmds,
+                              builtincmds_count, pipefd);
+
+    status_code = execbuiltin(&builtincmd_idx, pipedargs, pids, pid_count);
+  } else {
+    // fork current process to run command in a child
+    int child_status;
+    pid_t child_pid = fork();
+    pids[(*pid_count)++] = child_pid;
+
+    if (child_pid < 0) {
+      // log error message in case of issue
+      printf("error: could not fork child\n");
+      exit(-1);
+    } else if (child_pid == 0) {
+      // setup pipefd such that can read from it
+      dup2(pipefd[0], 0);
+      close(pipefd[1]);
+      close(pipefd[0]);
+
+      int status_code = execvp(pipedargs[0], pipedargs);
+      exit(status_code);
+    } else {
+      // run second part of the pipe, pipedargs
+      //int status_code = bepiped(args, pids, pid_count, background, builtincmds,
+      //                          builtincmds_count, pipefd);
+
+      dup2(pipefd[1], 1);
+      close(pipefd[0]);
+      close(pipefd[1]);
+      int status_code = execvp(args[0], args);
+
+      // always assume the first part of the pipe will be awaited for
+      int exit_status = waitpid(child_pid, &child_status, 0);
+    }
+  }
+
+  return 1;
+}
+
+int runredirected(char *args[], pid_t pids[], int *pid_count, int *background,
+                  char *output_filename[], char *builtincmds[],
+                  int *builtincmds_count) {
+  /* Redirect output from executed command to output filename.*/
+  int builtincmd_idx = 0;
+  if (getcmdstatus(args[0], &builtincmd_idx, builtincmds_count, builtincmds)) {
+    int status_code = execbuiltin(&builtincmd_idx, args, pids, pid_count);
+  } else {
+    // fork current process to run command in a child
+    int child_status;
+    pid_t child_pid = fork();
+    pids[(*pid_count)++] = child_pid;
+
+    if (child_pid < 0) {
+      // log error message in case of issue
+      printf("error: could not fork child\n");
+      exit(-1);
+    } else if (child_pid == 0) {
+      int status_code = execvp(args[0], args);
+      exit(status_code);
+    } else if (background == 0) {
+      int exit_status = waitpid(child_pid, &child_status, 0);
+    }
+  }
+
+  return 1;
 }
 
 /*Retrieves data from user input and forks a child process to execute command
     specified by user.
 */
-int main(void) {    
-    // parsed command line arguments
-    char *args[20];
-    // boolean for background process
-    int bg;
-    // record the index of the builtin command to execute
-    int builtincmd_idx;
-    // store background pid processes
-    pid_t pids[256];
-    int pid_count = 0;
-    int child_status;
+int main(void) {
+  // signal(SIGINT, sig_handler);
 
-    // reference all builtin commands
-    int builtincmds_count = 5;
-    char *builtincmds[builtincmds_count];
-    builtincmds[0] = "exit";
-    builtincmds[1] = "pwd";
-    builtincmds[2] = "cd";
-    builtincmds[3] = "fg";
-    builtincmds[4] = "jobs";
+  // parsed command line arguments
+  char *args[20];
+  char *pipedargs[20];
+  // boolean for background process
+  int bg;
+  // store background pid processes
+  pid_t pids[256];
+  int pid_count = 0;
 
-    while (1) {
-        char *output_filename[1];
-        bg = 0;
-        int cnt = getcmd(">>> ", args, &bg);
-        if (cnt == -1) {
-            continue;
-        }
+  // reference all builtin commands
+  int builtincmds_count = 5;
+  char *builtincmds[builtincmds_count];
+  builtincmds[0] = "exit";
+  builtincmds[1] = "pwd";
+  builtincmds[2] = "cd";
+  builtincmds[3] = "fg";
+  builtincmds[4] = "jobs";
 
-        // check whether is a built-in (0) or system cmd (1)
-        int cmd_status = getcmdstatus(args[0], &builtincmd_idx, &builtincmds_count, builtincmds);
-        // TODO: modify the output filename from an array of strings to a string
-        int redirected = rediroutput(args, &cnt, output_filename);
-        if(redirected == 1) {
-            freopen(output_filename[0], "w+", stdout);
-        }
+  while (1) {
+    char *output_filename[1];
+    bg = 0;
+    int builtincmd_idx = 0;
 
-        if (cmd_status == 0) {
-            // execute directly in parent process
-            int status_code = execbuiltin(&builtincmd_idx, args, pids, &pid_count);
-        } else {
-            // fork current process, both parent and child processes now have a child_pid var
-            pid_t child_pid = fork();
-            //printf("pid count %d pid %d \n", pid_count, *pids[pid_count]);
-            pids[pid_count++] = child_pid;
+    int cnt = getcmd(">>> ", args, &bg);
+    if (cnt == -1) {
+      continue;
+    }
 
-            // check if the pid is less than 0, something happened
-            if (child_pid < 0) {
-              exit(-1);
-            }
+    // TODO: modify the output filename from an array of strings to a string
+    int redirected = rediroutput(args, &cnt, output_filename);
+    // printf("is redirected %d\n", redirected);
+    int piped = pipedoutput(args, pipedargs, &cnt);
+    // printf("is piped %d\n", piped);
 
-            // child process running, execute stuff there
-            else if (child_pid == 0) {
-                int status_code = execvp(args[0], args);
-                exit(status_code);
-            }
+    piped = 1;
 
-            // here from the parent process - can wait for the child to return
-            // or continue if supposed to let the child run in the background
-            else if (bg == 0){
-                int exit_status = waitpid(child_pid, &child_status, 0);
-            }
-            else {
-                continue;
-            }
-        }
-    }        
+    char *args[] = {"ls", NULL};
+    char *pipedargs[] = {"wc", "-l", NULL};
+
+    if (piped && redirected) {
+      printf("error: do not support pipe and redirection\n");
+      exit(-1);
+    } else if (piped) {
+      int status_code = runpiped(args, pipedargs, pids, &pid_count, &bg,
+                                 builtincmds, &builtincmds_count);
+    } else if (redirected) {
+      int status_code =
+          runredirected(args, pids, &pid_count, &bg, output_filename,
+                        builtincmds, &builtincmds_count);
+    } else if (getcmdstatus(args[0], &builtincmd_idx, &builtincmds_count,
+                            builtincmds)) {
+      int status_code = execbuiltin(&builtincmd_idx, args, pids, &pid_count);
+    } else {
+      // fork current process to run command in a child
+      int child_status;
+      pid_t child_pid = fork();
+      pids[pid_count++] = child_pid;
+
+      if (child_pid < 0) {
+        // log error message in case of issue
+        printf("error: could not fork child\n");
+        exit(-1);
+      } else if (child_pid == 0) {
+        int status_code = execvp(args[0], args);
+        exit(status_code);
+      }
+
+      // here from the parent process - can wait for the child to return
+      // or continue if supposed to let the child run in the background
+      else if (bg == 0) {
+        int exit_status = waitpid(child_pid, &child_status, 0);
+      } else {
+        // not wait for child process to complete
+        continue;
+      }
+    }
+  }
 }
