@@ -11,17 +11,20 @@
 // empirical active kid tracker for signal handling
 pid_t current_block;
 
+/*Handle ctrl-z signals by ignoring them.*/
 void
 sigz_handler (int signum)
 {
 }
 
+/*Handle ctrl-c signals, by killing the child process running.*/
 void
 sigc_handler (int signum)
 {
   if (current_block > 0)
     {
       kill (current_block, signum);
+      current_block = -1;
     }
 }
 
@@ -81,15 +84,13 @@ getcmd (char *prompt, char *args[], int *background)
       return -1;
     }
 
-  // TODO: explain fix for execvp to work
+  // needed for execution of non-builtin command through execvp
   args[i++] = NULL;
 
   return (i - 1);
 }
 
-// TODO: implement fg: called with a number and pick specified pid and put it
-// in foreground
-
+/*Check if the command is a builtin command.*/
 int
 getcmdstatus (char *cmd, int *builtincmd_idx, int *builtincmds_count,
               char *builtincmds[])
@@ -110,6 +111,7 @@ getcmdstatus (char *cmd, int *builtincmd_idx, int *builtincmds_count,
   return cmd_status;
 }
 
+/*Get the current working directory path.*/
 int
 runcwd ()
 {
@@ -119,6 +121,7 @@ runcwd ()
   return 1;
 }
 
+/*Check if command includes a redirection.*/
 int
 rediroutput (char *args[], int *arg_count, char *output_filename[])
 {
@@ -141,6 +144,7 @@ rediroutput (char *args[], int *arg_count, char *output_filename[])
   return 0;
 }
 
+/*Check if command is a piped command (with two components).*/
 int
 pipedoutput (char *args[], char *pipedargs[], int *arg_count)
 {
@@ -175,6 +179,7 @@ pipedoutput (char *args[], char *pipedargs[], int *arg_count)
   return 0;
 }
 
+/*Update the list of background processes by waiting on them with no hang.*/
 int
 updatepids (int *pid_count, pid_t pids[])
 {
@@ -201,6 +206,9 @@ updatepids (int *pid_count, pid_t pids[])
   return 1;
 }
 
+/*Bring a background chil process to foreground. First check if the requested
+  process with pid selected_pid is still running and available.
+*/
 int
 fg (int *selected_pid, int *pid_count, pid_t pids[])
 {
@@ -222,11 +230,14 @@ fg (int *selected_pid, int *pid_count, pid_t pids[])
 
   // otherwise wait for child to complete
   int child_status;
+  current_block = *selected_pid;
   int pid_status = waitpid (*selected_pid, &child_status, 0);
+  current_block = -1;
 
   return 1;
 }
 
+/*List jobs currently running in the background, list their index and pid.*/
 int
 jobs (int *pid_count, pid_t pids[])
 {
@@ -292,6 +303,7 @@ execbuiltin (int *builtincmd_idx, char *args[], pid_t pids[], int *pid_count)
   return 0;
 }
 
+/* Handle first command of two shell piped commands.*/
 int
 bepiped (char *args[], pid_t pids[], int *pid_count, int *background,
          char *builtincmds[], int *builtincmds_count, int pipefd[])
@@ -341,6 +353,9 @@ bepiped (char *args[], pid_t pids[], int *pid_count, int *background,
   return 1;
 }
 
+/*Run piped commands (encapsulating decision logic for executing builtin
+  and non-builtin commands using child processes).
+*/
 int
 runpiped (char *args[], char *pipedargs[], pid_t pids[], int *pid_count,
           int *background, char *builtincmds[], int *builtincmds_count)
@@ -357,18 +372,10 @@ runpiped (char *args[], char *pipedargs[], pid_t pids[], int *pid_count,
 
   int builtincmd_idx = 0;
   if (getcmdstatus (pipedargs[0], &builtincmd_idx, builtincmds_count,
-                    builtincmds))
-    {
-      // run second part of the pipe, pipedargs
-      int status_code = bepiped (args, pids, pid_count, background,
-                                 builtincmds, builtincmds_count, pipefd);
-
-      dup2 (pipefd[0], 0);
-      close (pipefd[1]);
-      close (pipefd[0]);
-
-      status_code = execbuiltin (&builtincmd_idx, pipedargs, pids, pid_count);
-    }
+                    builtincmds)) {
+    printf("error: builtin cmds are not compatible with pipes");
+    exit(-1);
+  }
   else
     {
       // fork current process to run command in a child
@@ -413,6 +420,7 @@ runpiped (char *args[], char *pipedargs[], pid_t pids[], int *pid_count,
   return 1;
 }
 
+/*Run redirected process (handle output redirection).*/
 int
 runredirected (char *args[], pid_t pids[], int *pid_count, int *background,
                char *output_filename[], char *builtincmds[],
@@ -422,8 +430,32 @@ runredirected (char *args[], pid_t pids[], int *pid_count, int *background,
   int builtincmd_idx = 0;
   if (getcmdstatus (args[0], &builtincmd_idx, builtincmds_count, builtincmds))
     {
+      int child_status;
+      pid_t child_pid = fork ();
+      if (child_pid < 0)
+        {
+          // log error message in case of issue
+          printf ("error: could not fork child\n");
+          exit (-1);
+        }
+      else if (child_pid == 0)
+        {
+          int fd1 = creat (*output_filename, 0644);
+          dup2 (fd1, STDOUT_FILENO);
+          close (fd1);
 
-      int status_code = execbuiltin (&builtincmd_idx, args, pids, pid_count);
+          int status_code
+              = execbuiltin (&builtincmd_idx, args, pids, pid_count);
+          exit (status_code);
+        }
+      else if (background == 0)
+        {
+          current_block = child_pid;
+          pids[(*pid_count)++] = child_pid;
+
+          int exit_status = waitpid (child_pid, &child_status, 0);
+          current_block = -1;
+        }
     }
   else
     {
@@ -459,8 +491,8 @@ runredirected (char *args[], pid_t pids[], int *pid_count, int *background,
   return 1;
 }
 
-/*Retrieves data from user input and forks a child process to execute command
-    specified by user.
+/*A simple custom shell allowing execution of simple pipes with two commands,
+  output redirection, as well as a couple builtin commands.
 */
 int
 main (void)

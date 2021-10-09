@@ -1,1 +1,5 @@
 # ecse427-assignment1
+
+A simple shell implemented in C. You may find the source code for the shell in the `main.c` file, as well as the executable `main.o` in this folder. Please note the following indications:
+- fg method: the fg method was implemented to use pids to bring backgrounded jobs to the foreground (although an indexing of the job was possible, as the list of running pids has to be updated, it would not be practical to use a shell-specific process index).
+- ctrl-c: the ctrl-c signal handler was implemented using a "last ran" logic. The last parent process running and waiting on a child process updates a global pid variable with the pid of the currently blocking child process. Running ctrl-c while awaiting for such a process will kill the process and return to prompt in the shell. Hitting ctrl-c while already at prompt will not have any effect (the user can leave the shell either with the `exit` command or `ctrl-d`).
